@@ -8,7 +8,7 @@ Enterprise-style scalping setup detector based on **Powell Trades** wick theory 
 - **ICT rejection blocks**: Long wicks at key levels (order block, FVG, liquidity sweep, swing)
 - **Killzone filter**: Setups only during London (02:00–05:00 EST) or New York (07:00–10:00 EST)
 - **Confluence scoring**: Ranked setups; Telegram alerts for new setups above threshold
-- **Instruments**: **Futures only** — NQ and ES via **yfinance** (`NQ=F`, `ES=F`)
+- **Instruments**: **Futures only** — NQ and ES. Data: **yfinance** (free, delayed), or **Topstep (Rithmic)** / **AMP (CQG)** for real-time (see [Real-time data](#real-time-data) below).
 - **Timeframe**: **5m** primary (Powell: filter to 5m to capture reversals)
 - **RR**: **1:4 to 1:6** (target_rr configurable); **min 10pt stop** (highly probable rejection blocks only)
 - **HTF alignment**: **1H + 4H + daily** bias required (stack probability); optional volume-scaled stop buffer
@@ -30,6 +30,15 @@ TELEGRAM_CHAT_ID=your_chat_id
 ```
 
 Or set the same variables in your environment.
+
+### Real-time data (Topstep Rithmic or AMP CQG)
+
+For real-time NQ/ES bars instead of delayed yfinance, you can use either:
+
+- **Topstep (Rithmic)** – Set `data.provider: rithmic`, add Rithmic credentials to `.env`, and configure the gateway URL. See [docs/TOPSTEP_RITHMIC_SETUP.md](docs/TOPSTEP_RITHMIC_SETUP.md).
+- **AMP (CQG)** – Set `data.provider: cqg`, clone CQG WebAPIPythonSamples, set `data.cqg.samples_path`, and add CQG credentials to `.env`. See [docs/CQG_SETUP.md](docs/CQG_SETUP.md).
+
+Use one provider at a time; both support NQ and ES.
 
 ## Usage
 
@@ -79,7 +88,7 @@ Edit `config/settings.yaml`:
 ## Project layout
 
 - `config/` – Settings, .env loading for Telegram
-- `data/` – Fetcher (yfinance for NQ/ES), real-time loop
+- `data/` – Fetcher (yfinance, Rithmic, or CQG for NQ/ES), real-time loop
 - `structure/` – Swing, FVG, order block, liquidity sweep, ATR
 - `wick/` – Powell wick theory (50% midpoint, respect)
 - `rejection_block/` – ICT rejection block detector

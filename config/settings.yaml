@@ -2,8 +2,17 @@
 # Futures only: Powell trades NQ / ES (yfinance continuous = NQ=F, ES=F)
 
 data:
-  provider: yfinance  # yfinance for NQ/ES futures
+  provider: yfinance  # yfinance | ccxt | rithmic (Topstep) | cqg (AMP real-time)
   exchange_id: binance  # only used if provider: ccxt
+  # Rithmic/Topstep: set provider to rithmic; put user/password in .env (RITHMIC_USER, RITHMIC_PASSWORD)
+  rithmic:
+    url: "rituz00100.rithmic.com:443"  # Get Topstep gateway URL from support or R|Trader Pro
+    system_name: TopstepTrader
+    app_name: scalping_bot
+  # CQG/AMP: set provider to cqg; clone WebAPIPythonSamples, set samples_path; .env: CQG_USER, CQG_PASSWORD
+  cqg:
+    host: "wss://api.cqg.com:443"
+    samples_path: ""  # path to CQG WebAPIPythonSamples repo root
   symbols:
     - NQ=F   # E-mini Nasdaq 100 futures (continuous)
     - ES=F   # E-mini S&P 500 futures (continuous)

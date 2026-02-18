@@ -1,5 +1,5 @@
 # Scalping Bot - Powell ICT Detector (NQ/ES futures)
-# Data: yfinance for NQ=F, ES=F
+# Data: yfinance for NQ=F, ES=F; optional: async_rithmic for Topstep/Rithmic real-time
 pandas>=2.0.0
 python-dotenv>=1.0.0
 numpy>=1.24.0
@@ -9,3 +9,5 @@ python-dateutil>=2.8.2
 pyyaml>=6.0
 python-telegram-bot>=20.0
 loguru>=0.7.0
+# Optional: for data.provider: rithmic (Topstep real-time bars)
+async_rithmic>=1.2.0

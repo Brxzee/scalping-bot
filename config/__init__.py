@@ -26,4 +26,12 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
         cfg.setdefault("telegram", {})["bot_token"] = os.getenv("TELEGRAM_BOT_TOKEN")
     if os.getenv("TELEGRAM_CHAT_ID"):
         cfg.setdefault("telegram", {})["chat_id"] = os.getenv("TELEGRAM_CHAT_ID")
+    if os.getenv("RITHMIC_USER"):
+        cfg.setdefault("data", {}).setdefault("rithmic", {})["user"] = os.getenv("RITHMIC_USER")
+    if os.getenv("RITHMIC_PASSWORD"):
+        cfg.setdefault("data", {}).setdefault("rithmic", {})["password"] = os.getenv("RITHMIC_PASSWORD")
+    if os.getenv("CQG_USER"):
+        cfg.setdefault("data", {}).setdefault("cqg", {})["user"] = os.getenv("CQG_USER")
+    if os.getenv("CQG_PASSWORD"):
+        cfg.setdefault("data", {}).setdefault("cqg", {})["password"] = os.getenv("CQG_PASSWORD")
     return cfg
