@@ -1,0 +1,94 @@
+# Powell ICT Scalping Detector - Enterprise Config
+# Futures only: Powell trades NQ / ES (yfinance continuous = NQ=F, ES=F)
+
+data:
+  provider: yfinance  # yfinance for NQ/ES futures
+  exchange_id: binance  # only used if provider: ccxt
+  symbols:
+    - NQ=F   # E-mini Nasdaq 100 futures (continuous)
+    - ES=F   # E-mini S&P 500 futures (continuous)
+  timeframe_primary: 5m     # Powell: filter to 5m to capture reversals
+  timeframe_structure: 1h   # Structure TF
+  timeframe_4h: 4h
+  timeframe_daily: 1d
+  lookback_bars: 500
+  timezone: America/New_York
+  # Realtime: sync to candle close so polling aligns with chart (no user error)
+  realtime_sync_to_candle_close: true   # Poll right after each 5m (or primary TF) close
+  realtime_buffer_after_close_seconds: 15  # Wait after close so data is available (15–20s if provider is slow)
+  realtime_poll_seconds: 60  # Fallback when realtime_sync_to_candle_close: false
+
+structure:
+  swing_lookback: 5
+  fvg_min_size_atr_mult: 0.2
+  order_block_displacement_bars: 2
+  order_block_body_atr_mult: 0.5
+  liquidity_sweep_threshold_pct: 0.02
+  atr_period: 14
+
+wick:
+  wick_to_body_ratio_min: 2.0
+  body_to_range_max: 0.5   # Pin-bar style: body < 50% of range
+  atr_min_mult: 0.3        # Wick at least 0.3 * ATR
+  respect_bars_lookback: 10
+
+rejection_block:
+  wick_to_body_ratio_min: 2.0
+  reversal_confirmation_bars: 3
+  key_level_proximity_pct: 0.001   # 0.1% of price
+  volume_above_avg_mult: 1.0       # Volume >= 1.0 * recent avg
+
+killzone:
+  london_start: "02:00"    # EST
+  london_end: "05:00"
+  newyork_start: "07:00"
+  newyork_end: "10:00"
+  extend_minutes_after: 30  # Still valid 30 min after zone end
+
+# Powell: entry on retracement into the wick (before MM volume); HTF = bias only; high RR with discretion
+# See docs/STRATEGY.md for 5m/1h perfect-entry examples (rejection block → retrace into wick → high RR)
+target_cap:
+  min_rr: 4                 # Only take 1:4 or better
+  max_rr: 15                # Cap for high-RR discretion (examples show 6:1–14:1)
+  target_rr: 5              # Default target RR (1:5); raise for high-RR setups
+  # Entry within the wick: 0.5 = CE 50% of wick, 0.25 = tighter/higher RR, 0.75 = shallower
+  entry_fib_in_wick: 0.5
+  entry_zone_tolerance_points_nq: 2   # Band around entry level for retest (points)
+  entry_zone_tolerance_points_es: 1
+  min_risk_points_nq: 6     # Examples: 6–15 pt stops; allow 7 pt style
+  max_risk_points_nq: 20
+  min_risk_points_es: 4
+  max_risk_points_es: 12
+  stop_buffer_points_nq: 2  # Base buffer beyond wick (points)
+  stop_buffer_points_es: 1
+  volume_buffer_extra_nq: 2  # Extra buffer when volume above avg
+  volume_buffer_extra_es: 1
+  volume_above_avg_mult: 1.2
+  require_reversal_confirmed: true
+
+htf_bias:
+  enabled: true
+  # HTF is bias only (direction/confluence) — never filters; add score when aligned for discretion
+  require_1h: true
+  require_4h: true
+  require_daily: true
+  treat_none_as_aligned: true
+  lookback_bars: 50
+  method: structure
+
+confluence:
+  min_score_to_alert: 4    # Min total score to send Telegram
+  weights:
+    rejection_block: 1
+    wick_respect: 2
+    order_block: 1
+    fvg: 1
+    liquidity_sweep: 1
+    swing_level: 1
+    killzone: 2
+    htf_aligned: 2          # 1H + 4H + daily aligned (stack probability)
+
+telegram:
+  enabled: true
+  # Set via env: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+  rate_limit_seconds: 0.5
