@@ -2,6 +2,8 @@
 
 Your Topstep account uses **Rithmic** for market data. The bot can use the same connection (via `async_rithmic`) to get real-time 5m bars instead of delayed yfinance data.
 
+**Important:** **TopstepX accounts do NOT include Rithmic data access.** Only full Topstep accounts (e.g., evaluation/funded accounts) include Rithmic. If you have TopstepX only, use **Polygon.io free tier** instead (see [POLYGON_SETUP.md](POLYGON_SETUP.md)).
+
 ## Where Topstep documents this
 
 1. **Topstep Help Center**  

@@ -34,4 +34,6 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
         cfg.setdefault("data", {}).setdefault("cqg", {})["user"] = os.getenv("CQG_USER")
     if os.getenv("CQG_PASSWORD"):
         cfg.setdefault("data", {}).setdefault("cqg", {})["password"] = os.getenv("CQG_PASSWORD")
+    if os.getenv("POLYGON_API_KEY"):
+        cfg.setdefault("data", {}).setdefault("polygon", {})["api_key"] = os.getenv("POLYGON_API_KEY")
     return cfg

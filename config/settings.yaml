@@ -2,17 +2,29 @@
 # Futures only: Powell trades NQ / ES (yfinance continuous = NQ=F, ES=F)
 
 data:
-  provider: yfinance  # yfinance | ccxt | rithmic (Topstep) | cqg (AMP real-time)
+  provider: ibkr  # yfinance (free, delayed) | ibkr (IBKR real-time) | polygon (free tier, coming soon) | rithmic (Topstep real-time) | cqg (AMP real-time)
   exchange_id: binance  # only used if provider: ccxt
+  # Interactive Brokers (IBKR): set provider to ibkr; start TWS/IB Gateway, configure host/port/client_id
+  # Port: IB Gateway = 4002 (paper) / 4001 (live). TWS = 7497 (paper) / 7496 (live)
+  ibkr:
+    host: "127.0.0.1"  # TWS/IB Gateway host (usually localhost)
+    port: 4002  # 4002 = IB Gateway paper, 4001 = IB Gateway live; TWS: 7497 paper, 7496 live
+    client_id: 1  # Unique client ID (must be different from other IBKR connections)
+    use_rth: false  # false = include extended hours (more bars, aligns with Topstep/full session backtest)
+  # Massive.com (free tier, formerly Polygon.io): set provider to polygon; sign up at massive.com, get API key, add POLYGON_API_KEY to .env
+  # NOTE: Futures API is "coming soon" - not available yet
+  polygon:
+    api_key: ""  # Set via .env: POLYGON_API_KEY (free tier: 5 calls/min, minute bars, 2 years history)
   # Rithmic/Topstep: set provider to rithmic; put user/password in .env (RITHMIC_USER, RITHMIC_PASSWORD)
+  # NOTE: TopstepX accounts do NOT include Rithmic data access; only full Topstep accounts have Rithmic
   rithmic:
     url: "rituz00100.rithmic.com:443"  # Get Topstep gateway URL from support or R|Trader Pro
     system_name: TopstepTrader
     app_name: scalping_bot
   # CQG/AMP: set provider to cqg; clone WebAPIPythonSamples, set samples_path; .env: CQG_USER, CQG_PASSWORD
   cqg:
-    host: "wss://api.cqg.com:443"
-    samples_path: ""  # path to CQG WebAPIPythonSamples repo root
+    host: "wss://demoapi.cqg.com:443"
+    samples_path: "/Users/pipsayyy/scalping_bot/WebAPIPythonSamples"  # path to CQG WebAPIPythonSamples repo root
   symbols:
     - NQ=F   # E-mini Nasdaq 100 futures (continuous)
     - ES=F   # E-mini S&P 500 futures (continuous)

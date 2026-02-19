@@ -1,6 +1,6 @@
 """
 Cost-effective OHLCV data fetcher.
-Supports yfinance (free), ccxt (crypto), rithmic (Topstep real-time), and cqg (AMP/CQG real-time).
+Supports yfinance (free), ccxt (crypto), rithmic (Topstep real-time), cqg (AMP/CQG real-time), polygon (free tier), and ibkr (Interactive Brokers real-time).
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import pandas as pd
 
 from loguru import logger
 
-Provider = Literal["yfinance", "ccxt", "rithmic", "cqg"]
+Provider = Literal["yfinance", "ccxt", "rithmic", "cqg", "polygon", "ibkr"]
 
 
 def _tf_to_ccxt(tf: str) -> str:
@@ -59,6 +59,39 @@ def _symbol_to_cqg_root(symbol: str) -> str | None:
     return None
 
 
+def _symbol_to_polygon_root(symbol: str) -> str | None:
+    """Map NQ=F, ES=F to Polygon base symbol (NQ, ES)."""
+    u = (symbol or "").upper()
+    if u.startswith("ES=") or u == "ES":
+        return "ES"
+    if u.startswith("NQ=") or u == "NQ":
+        return "NQ"
+    return None
+
+
+def _tf_to_polygon_resolution(timeframe: str) -> str:
+    """Map timeframe string to Polygon resolution (e.g., 5m -> '5mins', 1h -> '1hour')."""
+    tf = (timeframe or "5m").strip().lower()
+    m = re.match(r"^(\d+)(m|h|d)$", tf)
+    if not m:
+        return "5mins"
+    num, unit = m.groups()
+    n = int(num)
+    if unit == "m":
+        if n == 1:
+            return "1min"
+        return f"{n}mins"
+    if unit == "h":
+        if n == 1:
+            return "1hour"
+        return f"{n}hours"
+    if unit == "d":
+        if n == 1:
+            return "1day"
+        return f"{n}days"
+    return "5mins"
+
+
 # CQG WebAPI BarUnit: minute = 8 (BAR_UNIT_MIN in samples)
 _CQG_BAR_UNIT_MIN = 8
 
@@ -71,7 +104,7 @@ def _tf_to_cqg_bar(timeframe: str) -> tuple[int, int]:
 
 
 class DataFetcher:
-    """Fetch OHLCV with timezone-aware index. yfinance, ccxt, rithmic (Topstep), or cqg (AMP)."""
+    """Fetch OHLCV with timezone-aware index. yfinance, ccxt, rithmic (Topstep), cqg (AMP), polygon, or ibkr (IBKR)."""
 
     def __init__(
         self,
@@ -87,6 +120,11 @@ class DataFetcher:
         cqg_user: str = "",
         cqg_password: str = "",
         cqg_samples_path: str = "",
+        polygon_api_key: str = "",
+        ibkr_host: str = "127.0.0.1",
+        ibkr_port: int = 4002,
+        ibkr_client_id: int = 1,
+        ibkr_use_rth: bool = True,
     ):
         self.provider = provider
         self.exchange_id = exchange_id
@@ -101,6 +139,11 @@ class DataFetcher:
         self.cqg_user = cqg_user
         self.cqg_password = cqg_password
         self.cqg_samples_path = cqg_samples_path
+        self.polygon_api_key = polygon_api_key
+        self.ibkr_host = ibkr_host
+        self.ibkr_port = ibkr_port
+        self.ibkr_client_id = ibkr_client_id
+        self.ibkr_use_rth = ibkr_use_rth
 
     def _get_exchange(self):
         if self._exchange is not None:
@@ -125,6 +168,10 @@ class DataFetcher:
             return self._fetch_rithmic(symbol, timeframe, limit)
         if self.provider == "cqg":
             return self._fetch_cqg(symbol, timeframe, limit)
+        if self.provider == "polygon":
+            return self._fetch_polygon(symbol, timeframe, limit)
+        if self.provider == "ibkr":
+            return self._fetch_ibkr(symbol, timeframe, limit)
         return self._fetch_ccxt(symbol, timeframe, limit)
 
     def _fetch_yfinance(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
@@ -209,6 +256,238 @@ class DataFetcher:
         else:
             df.index = df.index.tz_convert(self.timezone)
         return df.tail(limit)
+
+    def _fetch_polygon(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
+        """Fetch OHLCV via Polygon.io REST API (free tier: 5 calls/min, minute bars)."""
+        if not self.polygon_api_key:
+            logger.warning("Polygon: set POLYGON_API_KEY (e.g. in .env)")
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+        root = _symbol_to_polygon_root(symbol)
+        if not root:
+            logger.warning(f"Polygon: unsupported symbol {symbol}; use NQ=F or ES=F")
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+        try:
+            import requests
+        except ImportError:
+            logger.warning("Polygon: install 'requests' package: pip install requests")
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+        resolution = _tf_to_polygon_resolution(timeframe)
+        # Polygon FUTURES API: GET /futures/v1/aggs/{ticker} (not stocks v2/aggs/.../range/...)
+        # Ticker format: ES + month code + year digit (e.g., ESU5 = ES Sep 2025)
+
+        # Get front-month contract ticker
+        now = datetime.now()
+        month_codes = "FGHJKMNQUVXZ"  # CME: F=Jan,G=Feb,H=Mar,J=Apr,K=May,M=Jun,N=Jul,Q=Aug,U=Sep,V=Oct,X=Nov,Z=Dec
+        current_month_idx = now.month - 1
+        tickers_to_try = []
+        for offset in range(3):
+            month_idx = (current_month_idx + offset) % 12
+            year_digit = str((now.year + (current_month_idx + offset) // 12) % 10)
+            month_code = month_codes[month_idx]
+            tickers_to_try.append(f"{root}{month_code}{year_digit}")
+
+        # Start date for window_start.gte (limit bars ago)
+        interval_mins = _tf_to_interval_minutes(timeframe)
+        start_dt = datetime.now() - timedelta(minutes=limit * interval_mins)
+        start_date_str = start_dt.strftime("%Y-%m-%d")
+
+        # Try Massive.com first, then Polygon.io (same API; rebrand may use either host)
+        api_bases = ["https://api.polygon.io", "https://api.massive.com"]
+        bars_data = None
+        last_error = None
+        for ticker in tickers_to_try:
+            for base in api_bases:
+                try:
+                    url = f"{base}/futures/v1/aggs/{ticker}"
+                    params = {
+                        "resolution": resolution,
+                        "limit": limit,
+                        "sort": "window_start.asc",
+                        "apiKey": self.polygon_api_key,
+                    }
+                    # Optional: filter by start date if API supports it
+                    params["window_start.gte"] = start_date_str
+                    resp = requests.get(url, params=params, timeout=15)
+                    try:
+                        data = resp.json()
+                    except Exception:
+                        data = {}
+                    if data.get("status") == "OK" and data.get("results"):
+                        bars_data = data.get("results", [])
+                        break
+                    # Capture API error for logging
+                    last_error = (
+                        data.get("error")
+                        or data.get("message")
+                        or (f"{resp.status_code} {resp.reason}" if not resp.ok else None)
+                    )
+                except requests.exceptions.RequestException as e:
+                    last_error = str(e)
+                except Exception as e:
+                    last_error = str(e)
+            if bars_data:
+                break
+
+        if not bars_data:
+            msg = f"Polygon: no data for {root} (tried {tickers_to_try})"
+            if last_error:
+                msg += f". API: {last_error}"
+            logger.warning(msg)
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+        # Build DataFrame from bars (futures API uses window_start in ns, open/high/low/close/volume)
+        rows = []
+        for bar in bars_data:
+            ts_ns = bar.get("window_start", 0)  # nanoseconds
+            if ts_ns == 0:
+                continue
+            dt = datetime.fromtimestamp(ts_ns / 1_000_000_000.0)
+            rows.append({
+                "open": float(bar.get("open", 0)),
+                "high": float(bar.get("high", 0)),
+                "low": float(bar.get("low", 0)),
+                "close": float(bar.get("close", 0)),
+                "volume": int(bar.get("volume", 0)),
+                "time": dt,
+            })
+
+        if not rows:
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+        df = pd.DataFrame(rows).set_index("time")
+        df.index = pd.to_datetime(df.index)
+        # Polygon data is in Central Time (CT)
+        if df.index.tz is None:
+            df.index = df.index.tz_localize("America/Chicago").tz_convert(self.timezone)
+        else:
+            df.index = df.index.tz_convert(self.timezone)
+        return df.tail(limit)
+
+    def _fetch_ibkr(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
+        """Fetch OHLCV via Interactive Brokers (ib_insync). Requires TWS/IB Gateway running."""
+        try:
+            from ib_insync import IB, Future, util
+        except ImportError:
+            logger.warning("IBKR: install 'ib_insync' package: pip install ib_insync")
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+        root = _symbol_to_rithmic_root(symbol)  # Reuse same mapping: NQ=F -> NQ, ES=F -> ES
+        if not root:
+            logger.warning(f"IBKR: unsupported symbol {symbol}; use NQ=F or ES=F")
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+        # Map timeframe to IBKR bar size (must use exact strings: 1 min, 2 mins, 5 mins, 1 hour, 1 day, etc.)
+        interval_mins = _tf_to_interval_minutes(timeframe)
+        if interval_mins < 60:
+            if interval_mins == 1:
+                bar_size = "1 min"
+            elif interval_mins in (2, 3, 5, 10, 15, 20, 30):
+                bar_size = f"{interval_mins} mins"
+            else:
+                bar_size = "5 mins"  # fallback to nearest
+        elif interval_mins < 24 * 60:
+            hours = interval_mins // 60
+            if hours in (1, 2, 3, 4, 8):
+                bar_size = f"{hours} hour" if hours == 1 else f"{hours} hours"
+            else:
+                bar_size = "1 hour"
+        else:
+            bar_size = "1 day"
+
+        # Calculate duration (IBKR format: "X D" for days, "X W" for weeks, etc.)
+        duration_days = max(1, (limit * interval_mins) // (24 * 60))
+        duration = f"{duration_days} D"
+
+        ib = IB()
+        try:
+            ib.connect(self.ibkr_host, self.ibkr_port, clientId=self.ibkr_client_id)
+        except Exception as e:
+            logger.warning(f"IBKR: failed to connect to {self.ibkr_host}:{self.ibkr_port}: {e}")
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+        try:
+            # CME NQ/ES expire quarterly (Mar, Jun, Sep, Dec); need lastTradeDateOrContractMonth (YYYYMM)
+            now = datetime.now()
+            year = now.year
+            month = now.month
+            # Next quarterly month: 3,6,9,12
+            quarters = (3, 6, 9, 12)
+            for q in quarters:
+                if month <= q:
+                    front_yyyymm = f"{year}{q:02d}"
+                    break
+            else:
+                front_yyyymm = f"{year + 1}03"
+            contract = Future(
+                symbol=root,
+                lastTradeDateOrContractMonth=front_yyyymm,
+                exchange="CME",
+                currency="USD",
+            )
+            # Qualify so IB fills conId/localSymbol (required for historical data)
+            qualified = ib.qualifyContracts(contract)
+            if not qualified:
+                logger.warning(f"IBKR: could not qualify contract {root} {front_yyyymm}")
+                ib.disconnect()
+                return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+            contract = qualified[0]
+            # Request historical data (useRTH=False = include extended hours for more bars / backtest alignment)
+            bars = ib.reqHistoricalData(
+                contract,
+                endDateTime="",
+                durationStr=duration,
+                barSizeSetting=bar_size,
+                whatToShow="TRADES",
+                useRTH=self.ibkr_use_rth,
+            )
+            ib.sleep(1)  # Wait for data
+
+            if not bars:
+                logger.warning(f"IBKR: no bars returned for {root}")
+                ib.disconnect()
+                return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+            # Convert to DataFrame (build naive datetime from bar.date to avoid tzinfo/replace issues)
+            rows = []
+            for bar in bars:
+                d = bar.date
+                try:
+                    dt = datetime(d.year, d.month, d.day, d.hour, d.minute, d.second, getattr(d, "microsecond", 0))
+                except Exception:
+                    dt = datetime.fromtimestamp(d.timestamp()) if hasattr(d, "timestamp") else d
+                rows.append({
+                    "open": float(bar.open),
+                    "high": float(bar.high),
+                    "low": float(bar.low),
+                    "close": float(bar.close),
+                    "volume": int(bar.volume),
+                    "time": dt,
+                })
+
+            if not rows:
+                ib.disconnect()
+                return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+            df = pd.DataFrame(rows).set_index("time")
+            df.index = pd.to_datetime(df.index)
+            # IBKR returns data in exchange timezone (CME = CT); convert to configured timezone
+            if df.index.tz is None:
+                df.index = df.index.tz_localize("America/Chicago").tz_convert(self.timezone)
+            else:
+                df.index = df.index.tz_convert(self.timezone)
+            return df.tail(limit)
+
+        except Exception as e:
+            logger.warning(f"IBKR fetch failed for {symbol} {timeframe}: {e}")
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        finally:
+            try:
+                ib.disconnect()
+            except Exception:
+                pass
 
 
 async def _fetch_rithmic_async(
@@ -331,6 +610,8 @@ def get_fetcher(config: dict) -> DataFetcher:
     data_cfg = config.get("data", {})
     rithmic_cfg = data_cfg.get("rithmic", {})
     cqg_cfg = data_cfg.get("cqg", {})
+    polygon_cfg = data_cfg.get("polygon", {})
+    ibkr_cfg = data_cfg.get("ibkr", {})
     return DataFetcher(
         provider=data_cfg.get("provider", "yfinance"),
         exchange_id=data_cfg.get("exchange_id", "binance"),
@@ -344,4 +625,9 @@ def get_fetcher(config: dict) -> DataFetcher:
         cqg_user=cqg_cfg.get("user", ""),
         cqg_password=cqg_cfg.get("password", ""),
         cqg_samples_path=cqg_cfg.get("samples_path", ""),
+        polygon_api_key=polygon_cfg.get("api_key", ""),
+        ibkr_host=ibkr_cfg.get("host", "127.0.0.1"),
+        ibkr_port=ibkr_cfg.get("port", 4002),
+        ibkr_client_id=ibkr_cfg.get("client_id", 1),
+        ibkr_use_rth=ibkr_cfg.get("use_rth", True),
     )
